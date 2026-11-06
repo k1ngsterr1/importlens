@@ -1,0 +1,117 @@
+x-app: &app
+  image: importlens:local
+  build: .
+  environment: &database-env
+    IMPORTLENS_DATABASE_URL: postgresql://importlens:importlens@db:5432/importlens
+
+services:
+  db:
+    image: postgres:16
+    environment:
+      POSTGRES_DB: importlens
+      POSTGRES_USER: importlens
+      POSTGRES_PASSWORD: importlens
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U importlens -d importlens"]
+      interval: 2s
+      timeout: 3s
+      retries: 20
+    volumes:
+      - catalog:/var/lib/postgresql/data
+
+  redis:
+    image: redis:8.6.3-alpine
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      timeout: 2s
+      retries: 20
+
+  kafka:
+    image: apache/kafka:4.3.2
+    environment:
+      CLUSTER_ID: 4L6g3nShT-eMCtK--X86sw
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,CONTROLLER:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_LOG_DIRS: /var/lib/kafka/data
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+    healthcheck:
+      test: ["CMD", "/opt/kafka/bin/kafka-topics.sh", "--bootstrap-server", "kafka:9092", "--list"]
+      interval: 7s
+      timeout: 6s
+      retries: 15
+    volumes:
+      - kafka:/var/lib/kafka/data
+
+  kafka-topic:
+    image: apache/kafka:4.3.2
+    depends_on:
+      kafka:
+        condition: service_healthy
+    entrypoint: ["/opt/kafka/bin/kafka-topics.sh"]
+    command:
+      - --bootstrap-server
+      - kafka:9092
+      - --create
+      - --if-not-exists
+      - --topic
+      - importlens.catalog-events.v1
+      - --partitions
+      - "1"
+      - --replication-factor
+      - "1"
+
+  setup:
+    <<: *app
+    depends_on:
+      db:
+        condition: service_healthy
+    command: ["sh", "-ec", "importlens migrate && importlens seed-demo"]
+
+  app:
+    <<: *app
+    environment:
+      <<: *database-env
+      IMPORTLENS_REDIS_URL: redis://redis:6379/0
+    depends_on:
+      setup:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:${IMPORTLENS_PORT:-8010}:8000"
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - import urllib.request; urllib.request.urlopen("http://127.0.0.1:8000/api/v1/catalog", timeout=2).close()
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  relay:
+    <<: *app
+    environment:
+      <<: *database-env
+      IMPORTLENS_KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+    depends_on:
+      setup:
+        condition: service_completed_successfully
+      kafka-topic:
+        condition: service_completed_successfully
+    command: ["importlens", "relay"]
+    restart: on-failure
+
+volumes:
+  catalog:
+  kafka:

@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#f6f7fb">
+  <title>{% block title %}ImportLens · Catalog imports{% endblock %}</title>
+  <link rel="stylesheet" href="{{ url_for('static', path='workspace.css') }}">
+</head>
+<body>
+  <header class="topbar">
+    <div class="wrap topbar-inner">
+      <a class="brand" href="/">
+        <svg class="mark" width="30" height="30" viewBox="0 0 30 30" fill="none" aria-hidden="true">
+          <rect width="30" height="30" rx="8" fill="currentColor"/>
+          <path d="M8 10h8M8 15h6M8 20h3m10-7v8m-4-4h8" stroke="white" stroke-width="1.8" stroke-linecap="round"/>
+        </svg>
+        ImportLens
+      </a>
+      <a class="top-link" href="/docs">API reference <span aria-hidden="true">↗</span></a>
+    </div>
+  </header>
+  {% block body %}{% endblock %}
+</body>
+</html>

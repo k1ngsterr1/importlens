@@ -1,0 +1,184 @@
+{% extends "base.html" %}
+{% block body %}
+<main class="wrap workspace">
+  <div class="hero">
+    <div>
+      <p class="eyebrow">Catalog operations</p>
+      <h1>Supplier imports</h1>
+      <p class="subtitle">Compare an incoming price list with your active catalog.</p>
+    </div>
+    <div class="catalog-status">
+      <div class="catalog-status-title"><span class="dot"></span> Active catalog</div>
+      <div class="catalog-status-data"><strong>{{ state.item_count | count }}</strong> products <span>·</span> r{{ state.revision }}</div>
+    </div>
+  </div>
+  <div class="layout">
+    <aside class="sidebar">
+      <section class="panel intake" aria-labelledby="upload-heading">
+        <p class="eyebrow">01 / Upload</p>
+        <h2 id="upload-heading">New supplier file</h2>
+        <p class="muted small">CSV with <code>sku</code>, <code>name</code> and <code>price</code>. Prices are in USD.</p>
+        <form action="/upload" method="post" enctype="multipart/form-data">
+          <label class="sr-only" for="supplier-file">Supplier CSV file</label>
+          <input id="supplier-file" name="file" type="file" accept=".csv,text/csv" required>
+          <button class="button primary wide" type="submit">Create preview <span aria-hidden="true">→</span></button>
+        </form>
+        <div class="samples">
+          <p class="samples-label">Try a sample <span>20,000 rows</span></p>
+          <form action="/samples/with-errors" method="post" class="sample-row">
+            <button class="text-button" type="submit">Feed with errors <span aria-hidden="true">→</span></button>
+            <a class="download" href="/samples/with-errors.csv" aria-label="Download feed with errors">↓</a>
+          </form>
+          <form action="/samples/clean" method="post" class="sample-row">
+            <button class="text-button" type="submit">Corrected feed <span aria-hidden="true">→</span></button>
+            <a class="download" href="/samples/clean.csv" aria-label="Download corrected feed">↓</a>
+          </form>
+        </div>
+      </section>
+      <section class="panel history" aria-labelledby="history-heading">
+        <p class="eyebrow">Activity</p>
+        <h2 id="history-heading">Catalog history</h2>
+        {% if history %}
+        <ol>
+          {% for event in history %}
+          <li>
+            <span class="timeline-dot {% if event.kind == 'rollback' %}undo{% endif %}"></span>
+            <div>
+              {% if event.preview_id %}
+              <a href="/?preview_id={{ event.preview_id }}">Applied import</a>
+              {% else %}
+              <strong>Rolled back import</strong>
+              {% endif %}
+              <p>r{{ event.revision }} · <time datetime="{{ event.created_at.isoformat() }}">{{ event.created_at.strftime('%b %d, %H:%M UTC') }}</time></p>
+            </div>
+          </li>
+          {% endfor %}
+        </ol>
+        {% else %}
+        <p class="muted small">Applied imports will appear here.</p>
+        {% endif %}
+        {% if state.can_rollback %}
+        <form action="/rollback" method="post" class="rollback">
+          <input type="hidden" name="revision" value="{{ state.revision }}">
+          <button class="button secondary wide" type="submit"><span aria-hidden="true">↶</span> Roll back last import</button>
+        </form>
+        {% endif %}
+      </section>
+    </aside>
+
+    <section class="panel review" aria-labelledby="review-heading">
+      {% if not preview %}
+      <div class="review-heading">
+        <div><p class="eyebrow">02 / Review</p><h2 id="review-heading">Import preview</h2></div>
+        <span class="pill neutral">Awaiting file</span>
+      </div>
+      <div class="empty">
+        <svg width="76" height="76" viewBox="0 0 76 76" fill="none" aria-hidden="true">
+          <rect x="7" y="7" width="62" height="62" rx="19" fill="#eeedfd"/>
+          <rect x="21" y="19" width="26" height="34" rx="5" fill="white" stroke="#594cc5" stroke-width="2"/>
+          <path d="M28 29h12m-12 7h12m-12 7h6" stroke="#594cc5" stroke-width="2" stroke-linecap="round"/>
+          <circle cx="49" cy="46" r="9" fill="#594cc5"/>
+          <path d="m55.5 52.5 5 5" stroke="#594cc5" stroke-width="3" stroke-linecap="round"/>
+          <path d="M45 46h8m-4-4v8" stroke="white" stroke-width="1.5" stroke-linecap="round"/>
+        </svg>
+        <h3>See what changed</h3>
+        <p>Upload a supplier file or try a sample. Review price changes and validation results before applying the import.</p>
+      </div>
+      <div class="review-foot"><span class="step-label">03 / Apply</span><span class="muted small">Ready after review</span></div>
+      {% else %}
+      {% set s = preview.summary %}
+      {% set labels = {'ready': 'Ready to apply', 'blocked': 'Blocked', 'stale': 'Outdated preview', 'applied': 'Applied', 'no_changes': 'No changes'} %}
+      <div class="review-heading">
+        <div>
+          <p class="eyebrow">02 / Review</p>
+          <h2 id="review-heading">{{ preview.filename }}</h2>
+          <p class="muted small">{{ s.rows | count }} rows · Compared with catalog r{{ preview.base_revision }}</p>
+        </div>
+        <span class="pill {{ status }}">{{ labels[status] }}</span>
+      </div>
+      <div class="metrics">
+        <div><span>Added</span><strong>{{ s.added | count }}</strong></div>
+        <div><span>Updated</span><strong>{{ s.updated | count }}</strong></div>
+        <div><span>Missing</span><strong>{{ s.missing | count }}</strong></div>
+        <div><span>Errors</span><strong {% if s.errors %}class="error-text"{% endif %}>{{ s.errors | count }}</strong></div>
+      </div>
+      <nav class="tabs" aria-label="Preview sections">
+        <a class="{{ 'selected' if tab == 'changes' }}" {% if tab == 'changes' %}aria-current="page"{% endif %} href="/?preview_id={{ preview.id }}">Changes <span>{{ s.changes | count }}</span></a>
+        <a class="{{ 'selected' if tab == 'issues' }}" {% if tab == 'issues' %}aria-current="page"{% endif %} href="/?preview_id={{ preview.id }}&amp;tab=issues">Issues <span>{{ (s.errors + s.warnings) | count }}</span></a>
+      </nav>
+      {% if tab == 'changes' %}
+      <div class="table-tools">
+        <p class="muted small">Missing products stay in the catalog.</p>
+        <nav class="filters" aria-label="Filter changes">
+          {% for label, value in [('All', none), ('Added', 'added'), ('Updated', 'updated'), ('Missing', 'missing')] %}
+          <a {% if kind == value %}aria-current="page"{% endif %} href="/?preview_id={{ preview.id }}{% if value %}&amp;kind={{ value }}{% endif %}">{{ label }}</a>
+          {% endfor %}
+        </nav>
+      </div>
+      {% endif %}
+      {% if rows %}
+      <div class="table-scroll" tabindex="0" role="region" aria-label="Product changes">
+        <table>
+          <thead><tr><th scope="col">Product</th><th scope="col">Change</th><th scope="col" class="numeric">Old price</th><th scope="col" class="numeric">New price</th></tr></thead>
+          <tbody>
+            {% for row in rows %}
+            <tr>
+              <td>
+                <strong>{{ (row.after or row.before).name }}</strong>
+                <code>{{ row.sku }}</code>
+                {% if row.before and row.after and row.before.name != row.after.name %}
+                <span class="previous-name">Was {{ row.before.name }}</span>
+                {% endif %}
+              </td>
+              <td><span class="pill {{ row.kind }}">{{ row.kind | capitalize }}</span>{% if row.flagged %}<span class="flag">Price jump</span>{% endif %}</td>
+              <td class="numeric muted">{{ row.before.price_cents | dollars if row.before else '—' }}</td>
+              <td class="numeric">{{ row.after.price_cents | dollars if row.after else '—' }}</td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      {% elif issues %}
+      <div class="table-scroll" tabindex="0" role="region" aria-label="Validation issues">
+        <table>
+          <thead><tr><th scope="col">Line</th><th scope="col">Severity</th><th scope="col">SKU</th><th scope="col">Details</th></tr></thead>
+          <tbody>
+            {% for issue in issues %}
+            <tr><td>{{ issue.line or '—' }}</td><td><span class="pill {{ issue.severity }}">{{ issue.severity | capitalize }}</span></td><td><code>{{ issue.sku or '—' }}</code></td><td>{{ issue.message }}</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      {% else %}
+      <p class="table-empty">{{ 'No issues found.' if tab == 'issues' else 'No changes in this view.' }}</p>
+      {% endif %}
+      {% if total %}
+      {% set base = '/?preview_id=' ~ preview.id ~ '&tab=' ~ tab ~ ('&kind=' ~ kind if kind and tab == 'changes' else '') %}
+      <div class="pagination">
+        <span>{{ ((page - 1) * page_size + 1) | count }}–{{ [page * page_size, total] | min | count }} of {{ total | count }}</span>
+        <nav aria-label="Preview pages">
+          {% if page > 1 %}<a href="{{ base }}&amp;page={{ page - 1 }}">Previous</a>{% endif %}
+          {% if page * page_size < total %}<a href="{{ base }}&amp;page={{ page + 1 }}">Next →</a>{% endif %}
+        </nav>
+      </div>
+      {% endif %}
+      <div class="review-foot">
+        <div>
+          <p class="step-label">03 / Apply</p>
+          <p class="muted small">
+            {% if status == 'blocked' %}Fix {{ s.errors }} blocking {{ 'error' if s.errors == 1 else 'errors' }} to continue.
+            {% elif status == 'stale' %}The catalog changed. Create a new preview.
+            {% elif status == 'applied' %}Applied as catalog revision {{ preview.applied_revision }}.
+            {% elif status == 'no_changes' %}There are no products to add or update.
+            {% else %}Apply {{ (s.added + s.updated) | count }} product changes.{% endif %}
+          </p>
+        </div>
+        {% if status == 'ready' %}
+        <form action="/review/{{ preview.id }}/apply" method="post"><button class="button primary" type="submit">Apply import <span aria-hidden="true">→</span></button></form>
+        {% endif %}
+      </div>
+      {% endif %}
+    </section>
+  </div>
+</main>
+{% endblock %}

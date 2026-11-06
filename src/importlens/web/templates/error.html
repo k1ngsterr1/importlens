@@ -1,0 +1,9 @@
+{% extends "base.html" %}
+{% block title %}ImportLens · Request failed{% endblock %}
+{% block body %}
+<main class="wrap workspace">
+  <p class="eyebrow">Request failed · {{ status }}</p>
+  <h1>{{ message }}</h1>
+  <p><a class="button secondary" href="/">Return to imports</a></p>
+</main>
+{% endblock %}

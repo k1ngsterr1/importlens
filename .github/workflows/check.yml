@@ -1,0 +1,82 @@
+name: Check
+on: [push, pull_request]
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: importlens
+          POSTGRES_PASSWORD: importlens
+          POSTGRES_DB: importlens_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -h 127.0.0.1 -U importlens -d importlens_test"
+          --health-interval 2s
+          --health-timeout 3s
+          --health-retries 20
+      redis:
+        image: redis:8.6.3-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 2s
+          --health-timeout 2s
+          --health-retries 20
+      kafka:
+        image: apache/kafka:4.3.2
+        ports:
+          - 9092:9092
+        options: >-
+          --health-cmd "/opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --list"
+          --health-interval 7s
+          --health-timeout 6s
+          --health-retries 15
+    env:
+      IMPORTLENS_TEST_REDIS_URL: redis://127.0.0.1:6379/0
+      IMPORTLENS_TEST_KAFKA_BOOTSTRAP_SERVERS: 127.0.0.1:9092
+      IMPORTLENS_TEST_DATABASE_URL: postgresql://importlens:importlens@localhost:5432/importlens_test
+    steps:
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v7
+        with:
+          version: "0.11.28"
+      - run: uv sync --locked
+      - run: uv run --locked ruff check .
+      - run: uv run --locked ruff format --check .
+      - run: uv run --locked mypy
+      - run: uv run --locked pytest
+
+  compose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+      - run: docker compose config --quiet
+      - run: docker compose up --build --wait --wait-timeout 180
+      - name: Check the stack
+        shell: bash
+        run: |
+          curl -fsS http://127.0.0.1:8010/api/v1/catalog | jq -e '.revision == 1 and .item_count == 20000'
+          response=$(curl -fsS -X POST http://127.0.0.1:8010/api/v1/previews \
+            -F 'file=@-;filename=vendor.csv;type=text/csv' <<'CSV'
+          sku,name,price
+          CI-001,CI product,10.00
+          CSV
+          )
+          preview_id=$(jq -er '.id' <<< "$response")
+          test "$(docker compose exec -T redis redis-cli GET importlens:preview-quota:v1)" = 1
+          curl -fsS -X POST "http://127.0.0.1:8010/api/v1/previews/$preview_id/apply" \
+            | jq -e '.revision == 2'
+          docker compose exec -T kafka /opt/kafka/bin/kafka-console-consumer.sh \
+            --bootstrap-server kafka:9092 --topic importlens.catalog-events.v1 \
+            --from-beginning --max-messages 2 --timeout-ms 15000 \
+            | jq -e -s 'map(.revision) == [1, 2]'
+      - if: failure()
+        run: docker compose logs --no-color
+      - if: always()
+        run: docker compose down --volumes
